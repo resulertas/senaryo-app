@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400;1,700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "Courier Prime", monospace;
+}
+
+[contenteditable]:empty:before {
+  content: attr(data-placeholder);
+  opacity: 0.5;
+  pointer-events: none;
+  display: block;
+}
+
+@media screen {
+  .visual-page-break {
+    margin-top: var(--visual-mt) !important;
+  }
+}
+
+@media print {
+  html, body, #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: white;
+    margin: 0;
+  }
+  .h-screen {
+    height: auto !important;
+  }
+  .overflow-hidden {
+    overflow: visible !important;
+  }
+  .flex-1 {
+    flex: none !important;
+    display: block !important;
+  }
+  .no-print, .no-print * {
+    display: none !important;
+  }
+  #print-area-container {
+    background: white !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  #print-area {
+    box-shadow: none !important;
+    background: white !important;
+    color: black !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    transform: none !important;
+  }
+  textarea, [contenteditable] {
+    color: black !important;
+    resize: none !important;
+  }
+  .print-page-break {
+    break-before: page;
+    margin-top: var(--print-mt, 96px) !important;
+  }
+  @page {
+    size: A4;
+    margin: 0;
+  }
+}
