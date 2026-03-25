@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { FolderOpen, Save, Type, Globe, RefreshCw, Mic, ChevronDown, Trash2, Sun, Moon, ZoomIn, ZoomOut, Undo2, Redo2, FileUp, Bold, Italic } from 'lucide-react';
-import { ScreenplayFormat, ElementType } from '../types';
+import { ScreenplayFormat, ElementType, Screenplay } from '../types';
 
 interface ToolbarProps {
   format: ScreenplayFormat;
   setFormat: (format: ScreenplayFormat) => void;
   onClearAll: () => void;
   onOpen: () => void;
+  projects?: Screenplay[];
+  onOpenRecent?: (project: Screenplay) => void;
   onExportPDF: () => void;
   onExportRTF: () => void;
   onExportDOCX: () => void;
@@ -26,12 +28,25 @@ interface ToolbarProps {
 }
 
 export default function Toolbar({ 
-  format, setFormat, onClearAll, onOpen, onExportPDF, onExportRTF, onExportDOCX, 
+  format, setFormat, onClearAll, onOpen, projects = [], onOpenRecent, onExportPDF, onExportRTF, onExportDOCX, 
   isListening, toggleListening, changeCurrentElementType,
   theme, setTheme, fontFamily, fontSize, fontColor, handleStyleChange,
   onUndo, onRedo, canUndo, canRedo
 }: ToolbarProps) {
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isOpenMenuOpen, setIsOpenMenuOpen] = useState(false);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsExportOpen(false);
+        setIsOpenMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const elementTypes: { label: string, type: ElementType }[] = [
     { label: 'Sahne', type: 'scene' },
@@ -47,7 +62,7 @@ export default function Toolbar({
   const inputBg = theme === 'dark' ? 'bg-[#0f172a]' : 'bg-white';
 
   return (
-    <div className={`relative z-50 flex items-center px-4 py-2 border-b text-sm flex-wrap gap-y-2 no-print ${bgClass}`}>
+    <div ref={menuRef} className={`relative z-50 flex items-center px-4 py-2 border-b text-sm flex-wrap gap-y-2 no-print ${bgClass}`}>
       <div className="flex items-center space-x-2 mr-6 shrink-0">
         <button 
           onClick={onUndo} 
@@ -91,10 +106,46 @@ export default function Toolbar({
           <Trash2 size={18} className="mb-1" />
           <span className="text-[10px] font-medium">TEMİZLE</span>
         </button>
-        <button onClick={onOpen} className={`flex flex-col items-center justify-center p-2 rounded text-amber-500 ${btnHover}`}>
-          <FileUp size={18} className="mb-1" />
-          <span className="text-[10px] font-medium">AÇ</span>
-        </button>
+        <div className="relative z-50">
+          <button 
+            onClick={() => setIsOpenMenuOpen(!isOpenMenuOpen)} 
+            className={`flex flex-col items-center justify-center p-2 rounded text-amber-500 ${btnHover}`}
+          >
+            <FileUp size={18} className="mb-1" />
+            <span className="text-[10px] font-medium">AÇ</span>
+          </button>
+          {isOpenMenuOpen && (
+            <div className={`absolute top-full left-0 mt-1 w-48 border rounded shadow-xl z-50 ${theme === 'dark' ? 'bg-[#1e293b] border-slate-700' : 'bg-white border-slate-200'}`}>
+              <button 
+                onClick={() => { onOpen(); setIsOpenMenuOpen(false); }} 
+                className={`block w-full text-left px-4 py-2 text-xs font-semibold border-b ${theme === 'dark' ? 'border-slate-700' : 'border-slate-200'} ${btnHover}`}
+              >
+                Bilgisayardan Aç...
+              </button>
+              {projects.length > 0 ? (
+                <>
+                  <div className={`px-4 py-1 text-[10px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                    Son Çalışılanlar
+                  </div>
+                  {projects.map(p => (
+                    <button 
+                      key={p.id}
+                      onClick={() => { onOpenRecent?.(p); setIsOpenMenuOpen(false); }} 
+                      className={`block w-full text-left px-4 py-2 text-xs truncate ${btnHover}`}
+                      title={p.title}
+                    >
+                      {p.title}
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <div className={`px-4 py-2 text-xs ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                  Son proje yok
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         <button onClick={onExportDOCX} className={`flex flex-col items-center justify-center p-2 rounded text-emerald-500 ${btnHover}`}>
           <Save size={18} className="mb-1" />
           <span className="text-[10px] font-medium">KAYDET</span>

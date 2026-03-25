@@ -25,4 +25,5 @@ export interface Screenplay {
   elements: ScreenplayElement[];
   format: ScreenplayFormat;
   coverPage?: CoverPageData;
+  updatedAt?: number;
 }

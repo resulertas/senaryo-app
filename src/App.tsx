@@ -9,7 +9,7 @@ import Toolbar from './components/Toolbar';
 import Sidebar from './components/Sidebar';
 import Editor from './components/Editor';
 import StatusBar from './components/StatusBar';
-import { ScreenplayElement, ScreenplayFormat, ElementType, CoverPageData } from './types';
+import { ScreenplayElement, ScreenplayFormat, ElementType, CoverPageData, Screenplay } from './types';
 
 const generateId = () => Date.now().toString() + Math.random().toString(36).substr(2, 9);
 
@@ -91,6 +91,18 @@ export default function App() {
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
 
+  const [projects, setProjects] = useState<Screenplay[]>(() => {
+    const saved = localStorage.getItem('scriptHive_projects');
+    if (saved) return JSON.parse(saved);
+    return [];
+  });
+  
+  const [currentProjectId, setCurrentProjectId] = useState<string>(() => {
+    const saved = localStorage.getItem('scriptHive_currentProjectId');
+    if (saved) return saved;
+    return generateId();
+  });
+
   const [history, setHistory] = useState<ScreenplayElement[][]>([elements]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const isUndoRedo = React.useRef(false);
@@ -164,6 +176,39 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('scriptHive_coverPage', JSON.stringify(coverPage));
   }, [coverPage]);
+
+  useEffect(() => {
+    localStorage.setItem('scriptHive_currentProjectId', currentProjectId);
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    setProjects(prev => {
+      const existingIndex = prev.findIndex(p => p.id === currentProjectId);
+      const updatedProject: Screenplay = {
+        id: currentProjectId,
+        title: coverPage.title || 'İsimsiz Senaryo',
+        elements,
+        format,
+        coverPage,
+        updatedAt: Date.now()
+      };
+      
+      let newProjects = [...prev];
+      if (existingIndex >= 0) {
+        newProjects[existingIndex] = updatedProject;
+      } else {
+        newProjects.push(updatedProject);
+      }
+      
+      newProjects.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      if (newProjects.length > 5) {
+        newProjects = newProjects.slice(0, 5);
+      }
+      
+      localStorage.setItem('scriptHive_projects', JSON.stringify(newProjects));
+      return newProjects;
+    });
+  }, [elements, coverPage, format, currentProjectId]);
 
   const handleElementChange = (id: string, content: string) => {
     setElements(els => els.map(e => e.id === id ? { ...e, content } : e));
@@ -244,7 +289,16 @@ export default function App() {
   const handleClearAll = () => {
     if (window.confirm('Tüm senaryoyu silmek istediğinize emin misiniz?')) {
       const newId = generateId();
+      setCurrentProjectId(generateId());
       setElements([{ id: newId, type: 'scene', content: '' }]);
+      setCoverPage({
+        title: 'YENİ SENARYO',
+        author: 'Yazar adı',
+        version: 'v.01.',
+        date: new Date().toLocaleDateString('tr-TR')
+      });
+      setHistory([[{ id: newId, type: 'scene', content: '' }]]);
+      setHistoryIndex(0);
       setFocusedId(newId);
     }
   };
@@ -255,6 +309,20 @@ export default function App() {
 
   const handleOpenDOCX = () => {
     fileInputRef.current?.click();
+  };
+
+  const handleOpenRecentProject = (project: Screenplay) => {
+    setCurrentProjectId(project.id);
+    setElements(project.elements);
+    setCoverPage(project.coverPage || {
+      title: project.title,
+      author: '',
+      version: '',
+      date: ''
+    });
+    setFormat(project.format || 'US');
+    setHistory([project.elements]);
+    setHistoryIndex(0);
   };
 
   const handleFileOpen = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -273,20 +341,93 @@ export default function App() {
         pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker.default;
         
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let fullText = '';
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
-          const pageText = textContent.items.map((item: any) => item.str).join('\n');
-          fullText += pageText + '\n';
+          
+          const linesMap = new Map<number, { x: number, text: string, lastX: number, lastWidth: number }>();
+          
+          textContent.items.forEach((item: any) => {
+            if (!item.str) return;
+            
+            const x = item.transform[4];
+            const y = Math.round(item.transform[5]);
+            const width = item.width || 0;
+            
+            let foundY = y;
+            for (const key of linesMap.keys()) {
+              if (Math.abs(key - y) <= 4) {
+                foundY = key;
+                break;
+              }
+            }
+            
+            if (linesMap.has(foundY)) {
+              const existing = linesMap.get(foundY)!;
+              const distance = x - (existing.lastX + existing.lastWidth);
+              
+              // Only add space if the physical distance between chunks is significant
+              // and neither string already has a space at the boundary
+              const needsSpace = distance > 3 && 
+                               existing.text.length > 0 && 
+                               !existing.text.endsWith(' ') && 
+                               !item.str.startsWith(' ');
+                               
+              existing.text += (needsSpace ? ' ' : '') + item.str;
+              existing.x = Math.min(existing.x, x);
+              existing.lastX = x;
+              existing.lastWidth = width;
+            } else {
+              linesMap.set(foundY, { x, text: item.str, lastX: x, lastWidth: width });
+            }
+          });
+          
+          const sortedY = Array.from(linesMap.keys()).sort((a, b) => b - a);
+          
+          sortedY.forEach(y => {
+            const line = linesMap.get(y)!;
+            const text = line.text.trim();
+            if (!text) return;
+            
+            let type: ElementType = 'action';
+            const upperText = text.toLocaleUpperCase('tr-TR');
+            
+            if (text.match(/^(\d+\.\s*)?(İÇ\.|DIŞ\.|EXT\.|INT\.)/i)) {
+              type = 'scene';
+            } else if (text.match(/^(KESME:|GEÇİŞ:|CUT TO:|FADE OUT\.)/i) || line.x > 350) {
+              type = 'transition';
+            } else if (line.x > 220 && line.x < 320 && text === upperText && text.length < 60) {
+              type = 'character';
+            } else if (line.x > 180 && line.x <= 250 && text.startsWith('(')) {
+              type = 'parenthetical';
+            } else if (line.x > 140 && line.x <= 220) {
+              type = 'dialogue';
+            } else {
+              if (text.startsWith('(') && text.endsWith(')')) {
+                type = 'parenthetical';
+              } else if (text === upperText && text.length < 60 && !text.match(/^\d+$/) && line.x > 150) {
+                type = 'character';
+              } else if (newElements.length > 0) {
+                const lastType = newElements[newElements.length - 1].type;
+                if (lastType === 'character' || lastType === 'parenthetical') {
+                  type = 'dialogue';
+                }
+              }
+            }
+            
+            let content = text;
+            if (type === 'scene') content = content.replace(/^\d+\.\s*/, '');
+            
+            newElements.push({ id: generateId(), type, content });
+          });
         }
-        newElements = parseTextToElements(fullText);
       } else if (extension === 'docx') {
         const text = await file.text();
-        if (text.trim().startsWith('<html') || text.trim().startsWith('<!DOCTYPE html')) {
+        const cleanText = text.replace(/^\uFEFF/, '').trim();
+        if (cleanText.startsWith('<html') || cleanText.startsWith('<!DOCTYPE html')) {
           // It's actually an HTML file renamed to .docx
           const parser = new DOMParser();
-          const doc = parser.parseFromString(text, 'text/html');
+          const doc = parser.parseFromString(cleanText, 'text/html');
           const divs = doc.querySelectorAll('div');
           
           divs.forEach(div => {
@@ -313,8 +454,40 @@ export default function App() {
         } else {
           const arrayBuffer = await file.arrayBuffer();
           const mammoth = await import('mammoth');
-          const result = await mammoth.extractRawText({ arrayBuffer });
-          newElements = parseTextToElements(result.value);
+          const result = await mammoth.convertToHtml({ arrayBuffer });
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(result.value, 'text/html');
+          const paragraphs = doc.querySelectorAll('p');
+          
+          let lastType: ElementType = 'action';
+          paragraphs.forEach(p => {
+            const line = p.textContent?.trim() || '';
+            if (!line) {
+              lastType = 'action';
+              return;
+            }
+            
+            let type: ElementType = 'action';
+            const upperLine = line.toLocaleUpperCase('tr-TR');
+            
+            if (line.match(/^(\d+\.\s*)?(İÇ\.|DIŞ\.|EXT\.|INT\.)/i)) {
+              type = 'scene';
+            } else if (line.match(/^(KESME:|GEÇİŞ:|CUT TO:|FADE OUT\.)/i) || line.match(/>$/)) {
+              type = 'transition';
+            } else if (line.startsWith('(') && line.endsWith(')')) {
+              type = 'parenthetical';
+            } else if (line === upperLine && line.length < 60 && !line.match(/^\d+$/)) {
+              type = 'character';
+            } else if (lastType === 'character' || lastType === 'parenthetical' || lastType === 'dialogue') {
+              type = 'dialogue';
+            }
+            
+            lastType = type;
+            let content = line;
+            if (type === 'scene') content = content.replace(/^\d+\.\s*/, '');
+            
+            newElements.push({ id: generateId(), type, content });
+          });
         }
       } else if (extension === 'txt' || extension === 'rtf') {
         // Basic text reading for txt and rtf
@@ -322,6 +495,41 @@ export default function App() {
         // Very basic RTF stripping if it's RTF
         const cleanText = extension === 'rtf' ? text.replace(/{\\[^}]+}/g, '').replace(/\\[a-z]+\d*\s?/g, '') : text;
         newElements = parseTextToElements(cleanText);
+      } else if (extension === 'fdx') {
+        const text = await file.text();
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(text, 'text/xml');
+        const paragraphs = xmlDoc.querySelectorAll('Paragraph');
+        
+        paragraphs.forEach(p => {
+          const typeAttr = p.getAttribute('Type');
+          let type: ElementType = 'action';
+          
+          if (typeAttr === 'Scene Heading') type = 'scene';
+          else if (typeAttr === 'Character') type = 'character';
+          else if (typeAttr === 'Dialogue') type = 'dialogue';
+          else if (typeAttr === 'Parenthetical') type = 'parenthetical';
+          else if (typeAttr === 'Transition') type = 'transition';
+          else if (typeAttr === 'Action') type = 'action';
+          else return; // Skip other types like General, etc.
+          
+          const textNodes = p.querySelectorAll('Text');
+          let content = Array.from(textNodes).map(t => t.textContent || '').join('');
+          
+          if (content.trim()) {
+            if (type === 'scene') {
+              content = content.replace(/^\d+\.\s*/, '');
+            }
+            newElements.push({
+              id: generateId(),
+              type,
+              content: content.trim()
+            });
+          }
+        });
+      } else if (extension === 'fountain') {
+        const text = await file.text();
+        newElements = parseTextToElements(text);
       } else if (extension === 'doc' || extension === 'html') {
         // Our exported .doc is actually HTML
         const text = await file.text();
@@ -355,7 +563,16 @@ export default function App() {
       }
 
       if (newElements.length > 0) {
+        setCurrentProjectId(generateId());
         setElements(newElements);
+        setCoverPage({
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          author: 'Yazar adı',
+          version: 'v.01.',
+          date: new Date().toLocaleDateString('tr-TR')
+        });
+        setHistory([newElements]);
+        setHistoryIndex(0);
         setFocusedId(newElements[0].id);
       }
     } catch (error) {
@@ -426,23 +643,23 @@ export default function App() {
         let handle = docxFileHandle;
         if (!handle) {
           handle = await (window as any).showSaveFilePicker({
-            suggestedName: 'senaryo.doc',
+            suggestedName: 'senaryo.docx',
             types: [{
               description: 'Word Document',
-              accept: { 'application/msword': ['.doc'] },
+              accept: { 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] },
             }],
           });
           setDocxFileHandle(handle);
         }
         const writable = await handle.createWritable();
-        await writable.write(new Blob(['\ufeff', html], { type: 'application/msword' }));
+        await writable.write(new Blob(['\ufeff', html], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
         await writable.close();
       } else {
-        const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+        const blob = new Blob(['\ufeff', html], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'senaryo.doc';
+        a.download = 'senaryo.docx';
         a.click();
         URL.revokeObjectURL(url);
       }
@@ -826,7 +1043,7 @@ export default function App() {
     <div className={`flex flex-col h-screen font-sans overflow-hidden ${bgClass}`}>
       <input 
         type="file" 
-        accept=".doc,.docx,.txt,.rtf,.pdf,.html" 
+        accept=".doc,.docx,.txt,.rtf,.pdf,.html,.fdx,.fountain" 
         ref={fileInputRef} 
         onChange={handleFileOpen} 
         className="hidden" 
@@ -837,6 +1054,8 @@ export default function App() {
         setFormat={setFormat} 
         onClearAll={handleClearAll}
         onOpen={handleOpenDOCX}
+        projects={projects}
+        onOpenRecent={handleOpenRecentProject}
         onExportPDF={handleExportPDF}
         onExportDOCX={handleExportDOCX}
         onExportRTF={handleExportRTF}
